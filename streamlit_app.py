@@ -35,17 +35,19 @@ st.markdown("""
         margin: 0 auto;
         padding: 10px 20px;
     }
-    .stMetric {
-        border: 2px solid #00A859;
-        border-radius: 5px;
+    .metric-container {
+        border: 2px solid green;
+        border-radius: 8px;
         padding: 10px;
         text-align: center;
-        margin: 0 auto;
-        width: fit-content;
+        transition: border-color 0.3s ease;
     }
-    .stMetric.red {
-        border-color: #FF0000 !important;
-        color: #FF0000 !important;
+    .metric-container-low {
+        border: 2px solid red;
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+        transition: border-color 0.3s ease;
     }
     h1, h2, h3 {
         color: #00A859;
@@ -179,18 +181,8 @@ st.markdown("""
 # Добавление изображений
 st.markdown('<div class="logo-container">', unsafe_allow_html=True)
 st.image("images/bcclog.png", width=600, use_container_width=False)
-st.image("images/aichatlogo.png", width=200, use_column_width="always")
+st.image("images/aichan.jpg", width=200, use_column_width="always")
 st.markdown('</div>', unsafe_allow_html=True)
-
-# Добавим стиль для центрирования
-st.markdown("""
-    <style>
-    .logo-container img {
-        display: block !important;
-        margin: 0 auto !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
 
 # Генерация синтетической базы данных
 np.random.seed(42)
@@ -220,68 +212,82 @@ def check_egov_data(iin):
     tax_debt = abs(np.random.normal(5000, 2000) + (hash_val % 1000))
     return fines, round(tax_debt, 2)
 
-# Функция для оценки вероятности одобрения (беззалоговый кредит)
-def approval_probability(credit_score, monthly_payment, income, active_loans, loan_payments, late_payments, fines, tax_debt, age, loan_amount, loan_term_months):
-    free_balance = income - loan_payments
-    max_payment = free_balance * 0.4  # 40% свободного баланса
+# Функция для анализа факторов (заглушка)
+def analyze_client_factors(client_data, feature_importances):
+    factors = ['Доходы', 'Просрочки', 'Баланс счёта', 'Штрафы', 'Налоги', 'Кредиты']
+    result = []
+    for i, (value, importance) in enumerate(zip(client_data, feature_importances)):
+        if value > 0 and importance > 0.1:
+            result.append(f"{factors[i]}: значение {value:.2f}, влияет на рейтинг")
+    return result if result else ["Нет значимых факторов"]
 
-    # Проверка условий БЦК
+# Функция для оценки вероятности одобрения
+def approval_probability(credit_score, monthly_payment, income, active_loans, loan_payments, late_payments, fines, tax_debt, age, loan_amount, loan_term_months, iin, has_credit_history=True, has_permanent_registration=True, has_valid_documents=True, has_criminal_record=False):
     if loan_amount < 60000 or loan_amount > 7_000_000:
         return False, f"Сумма кредита должна быть от 60,000 ₸ до 7,000,000 ₸ (запрошено: {loan_amount:,} ₸)", 0
     if loan_term_months < 6 or loan_term_months > 60:
         return False, f"Срок кредита должен быть от 6 до 60 месяцев (запрошено: {loan_term_months} месяцев)", 0
+    if age < 21 or age > 68:
+        return False, f"Возраст должен быть от 21 до 68 лет (ваш возраст: {age})", 0
+    if not has_valid_documents:
+        return False, "Предоставлены недействительные документы", 0
+    if not has_permanent_registration:
+        return False, "Отсутствует постоянная регистрация в зоне обслуживания банка", 0
+    if has_criminal_record:
+        return False, "Наличие судимости по экономическим преступлениям", 0
 
-    # Базовая вероятность на основе кредитного рейтинга
+    annual_rate = 0.20
+    monthly_rate = annual_rate / 12
+    monthly_payment = (loan_amount * monthly_rate * (1 + monthly_rate) ** loan_term_months) / ((1 + monthly_rate) ** loan_term_months - 1)
+
+    free_balance = income - loan_payments
+    max_payment = free_balance * 0.4
+
     probability = 0
     if credit_score >= 750:
-        probability = 90
+        probability = 95
     elif credit_score >= 650:
-        probability = 75
+        probability = 80
     elif credit_score >= 600:
-        probability = 50
+        probability = 60
     elif credit_score >= 500:
-        probability = 30
+        probability = 40
     else:
-        probability = 10
+        probability = 20
 
-    # Уменьшение за превышение долговой нагрузки (с учётом процентной ставки 24,43% ГЭСВ)
-    annual_rate = 0.2443  # Средняя ГЭСВ
-    monthly_rate = annual_rate / 12
-    adjusted_monthly_payment = (monthly_payment * monthly_rate * (1 + monthly_rate) ** loan_term_months) / ((1 + monthly_rate) ** loan_term_months - 1)
-    if adjusted_monthly_payment > max_payment:
-        excess_ratio = (adjusted_monthly_payment - max_payment) / max_payment
-        probability -= min(40, excess_ratio * 40)  # Снижение до 40%
+    weights = {
+        'debt_load': 0.3,
+        'late_payments': 0.25,
+        'fines': 0.15,
+        'tax_debt': 0.15,
+        'active_loans': 0.1,
+        'credit_history': 0.05
+    }
 
-    # Уменьшение за просрочки
+    if monthly_payment > max_payment:
+        excess_ratio = (monthly_payment - max_payment) / max_payment
+        probability *= (1 - weights['debt_load'] * min(1, excess_ratio))
     if late_payments > 0:
-        probability -= late_payments * 15  # За каждую просрочку -15%
-
-    # Уменьшение за штрафы
+        probability *= (1 - weights['late_payments'] * min(1, late_payments / 5))
     if fines > 0:
-        probability -= fines * 10  # За каждый штраф -10%
-
-    # Уменьшение за налоговую задолженность
+        probability *= (1 - weights['fines'] * min(1, fines / 3))
     if tax_debt > 0:
-        probability -= min(25, tax_debt / 5000 * 15)  # До 25% снижения за налоги
-
-    # Уменьшение за активные кредиты
+        probability *= (1 - weights['tax_debt'] * min(1, tax_debt / 20000))
     if active_loans > 2:
-        probability -= (active_loans - 2) * 10  # За каждый лишний кредит -10%
-
-    # Уменьшение за возраст
-    if age > 68:
-        probability -= 30  # Пенсионерам старше 68 лет сложнее получить кредит
+        probability *= (1 - weights['active_loans'] * min(1, (active_loans - 2) / 3))
+    if not has_credit_history:
+        probability *= (1 - weights['credit_history'])
+    if age > 60:
+        probability *= 0.9
 
     probability = max(0, min(100, probability))
-    approved = probability >= 60
+    approved = probability >= 70
     return approved, f"Вероятность одобрения: {probability:.0f}%", probability
 
 # Функция для расчёта залогового кредита
 def collateral_loan_calculation(collateral_value, loan_amount, loan_term_months, income, loan_payments, age, iin):
     fines, tax_debt = check_egov_data(iin)
-
-    # Проверка условий БЦК
-    max_loan_amount = collateral_value * 0.7  # До 70% от стоимости залога
+    max_loan_amount = collateral_value * 0.7
     if loan_amount > max_loan_amount:
         return 0, 0, False, 0, f"Сумма кредита превышает 70% от стоимости залога (максимум: {max_loan_amount:,} ₸)"
     if loan_amount > 150_000_000:
@@ -289,26 +295,20 @@ def collateral_loan_calculation(collateral_value, loan_amount, loan_term_months,
     if loan_term_months < 3 or loan_term_months > 120:
         return 0, 0, False, 0, f"Срок кредита должен быть от 3 до 120 месяцев (запрошено: {loan_term_months} месяцев)"
 
-    # Процентная ставка 22,5% годовых (средняя)
     annual_rate = 0.225
     monthly_rate = annual_rate / 12
     monthly_payment = (loan_amount * monthly_rate * (1 + monthly_rate) ** loan_term_months) / ((1 + monthly_rate) ** loan_term_months - 1)
 
-    # Вероятность одобрения
     free_balance = income - loan_payments
     max_payment = free_balance * 0.4
-    probability = 70  # Базовая вероятность выше из-за залога
-
+    probability = 70
     if monthly_payment > max_payment:
         excess_ratio = (monthly_payment - max_payment) / max_payment
         probability -= min(40, excess_ratio * 40)
-
     if age > 68:
         probability -= 30
-
     if fines > 0:
         probability -= fines * 10
-
     if tax_debt > 0:
         probability -= min(25, tax_debt / 5000 * 15)
 
@@ -319,8 +319,6 @@ def collateral_loan_calculation(collateral_value, loan_amount, loan_term_months,
 # Функция для бизнес-кредита
 def business_loan_calculation(loan_amount, loan_term_months, income, loan_payments, business_type, purpose, iin):
     fines, tax_debt = check_egov_data(iin)
-
-    # Проверка условий БЦК
     max_loan = 20_000_000 if business_type == "ИП" else 100_000_000
     max_term = 36 if purpose == "Пополнение оборотных средств" else 120
     if loan_amount < 150_000 or loan_amount > max_loan:
@@ -328,23 +326,18 @@ def business_loan_calculation(loan_amount, loan_term_months, income, loan_paymen
     if loan_term_months < 6 or loan_term_months > max_term:
         return 0, False, 0, f"Срок кредита должен быть от 6 до {max_term} месяцев (запрошено: {loan_term_months} месяцев)"
 
-    # Процентная ставка 24,45% (средняя для беззалогового)
     annual_rate = 0.2445
     monthly_rate = annual_rate / 12
     monthly_payment = (loan_amount * monthly_rate * (1 + monthly_rate) ** loan_term_months) / ((1 + monthly_rate) ** loan_term_months - 1)
 
-    # Вероятность одобрения
     free_balance = income - loan_payments
     max_payment = free_balance * 0.4
-    probability = 60  # Базовая вероятность
-
+    probability = 60
     if monthly_payment > max_payment:
         excess_ratio = (monthly_payment - max_payment) / max_payment
         probability -= min(40, excess_ratio * 40)
-
     if fines > 0:
         probability -= fines * 10
-
     if tax_debt > 0:
         probability -= min(25, tax_debt / 5000 * 15)
 
@@ -352,124 +345,182 @@ def business_loan_calculation(loan_amount, loan_term_months, income, loan_paymen
     approved = probability >= 60
     return monthly_payment, approved, probability, ""
 
-# Функция рекомендаций (для беззалогового кредита)
-def generate_recommendations(client_data, loan_amount, loan_term_months, iin, loan_payments, age):
+# Подробные рекомендации
+def generate_recommendations(client_data, loan_amount, loan_term_months, iin, loan_payments, age, has_credit_history=True, has_permanent_registration=True, has_valid_documents=True, has_criminal_record=False):
     fines, tax_debt = check_egov_data(iin)
     client_data[3] = fines
     client_data[4] = tax_debt
     current_score = model.predict([client_data])[0]
-    monthly_payment = loan_amount / loan_term_months
+    monthly_payment = (loan_amount * (0.20 / 12) * (1 + 0.20 / 12) ** loan_term_months) / ((1 + 0.20 / 12) ** loan_term_months - 1)
     free_balance = client_data[0] - loan_payments
-    recommendations = []
+    recommendations = {
+        'financial': [],
+        'legal': [],
+        'personal': []
+    }
     loan_suggestions = []
     quick_actions = []
 
+    # Финансовые рекомендации
     if client_data[1] > 0:
         rec_text = (
-            f"Уважаемый клиент, у вас есть {client_data[1]} просроченных платежей. "
-            "Просрочки могут существенно снижать ваш кредитный рейтинг. "
-            "Рекомендуем погасить их как можно скорее. Для этого вы можете воспользоваться приложением БЦК или посетить ближайшее отделение."
+            f"Уважаемый клиент, у вас зафиксировано **{client_data[1]} просроченных платежей**, что снижает ваш кредитный рейтинг и шансы на одобрение кредита. "
+            "Просрочки сигнализируют банкам о высоком риске, поэтому их устранение — приоритетная задача.\n"
+            "**Что сделать:**\n"
+            "1. Проверьте детали просрочек в приложении БЦК (раздел 'Кредиты' → 'История платежей') или на сайте Первого кредитного бюро (www.1cb.kz).\n"
+            "2. Погасите задолженности через приложение БЦК, кассу банка или терминалы Qiwi/Kaspi. Например, погашение просрочки в 50,000 ₸ может повысить вероятность одобрения на 15–20%.\n"
+            "3. Дождитесь обновления кредитной истории (3–5 рабочих дней) и подайте новую заявку.\n"
+            "**Совет:** Начните с самых старых просрочек или с наибольшими суммами.\n"
         )
-        recommendations.append(rec_text)
-        quick_actions.append(("Погасить просроченные платежи", "https://cabinet.bcc.kz"))
+        recommendations['financial'].append(rec_text)
+        quick_actions.append(("Погасить просрочки", "https://cabinet.bcc.kz"))
 
     if client_data[3] > 0:
         rec_text = (
-            f"Мы заметили, что у вас есть {client_data[3]} неоплаченных штрафов, возможно, за нарушение ПДД. "
-            "Неоплаченные штрафы могут негативно влиять на решение по кредиту. "
-            "Советуем оплатить их через портал eGov.kz. После оплаты данные обновятся в течение 3–5 рабочих дней."
+            f"У вас есть **{client_data[3]} неоплаченных штрафов** (например, за нарушение ПДД), что снижает ваш кредитный рейтинг. "
+            "Банки проверяют данные через базу КГД, и даже небольшие штрафы (от 5,000 ₸) могут повлиять на решение.\n"
+            "**Что сделать:**\n"
+            "1. Проверьте наличие штрафов на портале eGov.kz (раздел 'Штрафы') или в приложении БЦК.\n"
+            "2. Оплатите штрафы через eGov.kz, приложение Kaspi или в отделении банка. Погашение штрафа в 10,000 ₸ может повысить вероятность одобрения на 5–10%.\n"
+            "3. Сохраните квитанцию и дождитесь обновления данных в базе КГД (3–5 рабочих дней).\n"
+            "**Совет:** Проверьте дополнительные штрафы через приложение 'Сергек' или сайт МВД РК.\n"
         )
-        recommendations.append(rec_text)
-        quick_actions.append(("Оплатить штрафы за ПДД", "https://egov.kz"))
+        recommendations['legal'].append(rec_text)
+        quick_actions.append(("Оплатить штрафы", "https://egov.kz/services/10108"))
 
     if client_data[4] > 0:
         rec_text = (
-            f"Уважаемый клиент, у вас обнаружена налоговая задолженность в размере {client_data[4]:.2f} ₸. "
-            "Это может стать причиной отказа в выдаче кредита. "
-            "Рекомендуем погасить задолженность через портал eGov.kz в разделе 'Налоги'. "
-            "После оплаты данные обновятся в течение 5–7 рабочих дней, что улучшит ваши шансы на одобрение."
+            f"Ваша налоговая задолженность составляет **{client_data[4]:.2f} ₸**, что является серьёзным препятствием для одобрения кредита. "
+            "Банки проверяют данные через КГД, и даже долги от 2,000 ₸ могут привести к отказу.\n"
+            "**Что сделать:**\n"
+            "1. Проверьте сумму задолженности на eGov.kz (раздел 'Налоги' → 'Задолженность') или в кабинете налогоплательщика (cabinet.kgd.gov.kz).\n"
+            "2. Погасите долг через eGov.kz, приложение БЦК или в кассе банка. Погашение 20,000 ₸ может повысить вероятность одобрения на 10–15%.\n"
+            "3. Дождитесь обновления данных в базе КГД (5–7 рабочих дней).\n"
+            "**Совет:** Проверьте, нет ли дополнительных начислений за прошлые годы (налог на имущество или транспорт).\n"
         )
-        recommendations.append(rec_text)
-        quick_actions.append(("Погасить налоговую задолженность", "https://egov.kz/services/10108"))
+        recommendations['legal'].append(rec_text)
+        quick_actions.append(("Погасить налоги", "https://egov.kz/services/10108"))
 
     if client_data[5] > 2:
         rec_text = (
-            f"У вас сейчас {client_data[5]} активных кредитов, что создаёт высокую долговую нагрузку. "
-            "Для улучшения кредитного рейтинга советуем закрыть хотя бы один из кредитов. "
-            "Вы можете сделать это через приложение БЦК или в отделении банка."
+            f"У вас **{client_data[5]} активных кредитов**, что создаёт высокую долговую нагрузку (более 50% дохода). "
+            "БЦК оценивает соотношение платежей к доходу (PTI), и превышение 40% снижает вероятность одобрения.\n"
+            "**Что сделать:**\n"
+            "1. Проверьте текущие кредиты на www.1cb.kz или в приложении БЦК.\n"
+            "2. Погасите один из кредитов, начиная с самого дорогого (высокая ставка) или с наименьшим остатком. Закрытие кредита с платежом 30,000 ₸ повысит вероятность на 10–20%.\n"
+            "3. Рассмотрите рефинансирование через БЦК, чтобы объединить кредиты в один с низкой ставкой.\n"
+            "**Совет:** Снизьте сумму нового кредита или увеличьте срок, чтобы уменьшить платёж.\n"
         )
-        recommendations.append(rec_text)
-        quick_actions.append(("Закрыть один из кредитов", "https://cabinet.bcc.kz/loans"))
+        recommendations['financial'].append(rec_text)
+        quick_actions.append(("Рефинансировать кредиты", "https://bcc.kz/loans/refinancing"))
 
     if free_balance < monthly_payment * 0.4:
         rec_text = (
-            f"Ваш свободный баланс после текущих платежей составляет {free_balance:.2f} ₸, "
-            f"а ежемесячный платёж по желаемому кредиту — {monthly_payment:.2f} ₸. "
-            "Это превышает допустимую нагрузку (40% от свободного баланса). "
-            "Рекомендуем рассмотреть либо уменьшение суммы кредита, либо увеличение срока кредитования."
+            f"Ваш свободный баланс после текущих платежей: **{free_balance:.2f} ₸**, но ежемесячный платёж по кредиту: **{monthly_payment:.2f} ₸**, "
+            "что превышает допустимую нагрузку (40% баланса). БЦК требует, чтобы платежи не превышали 40–50% дохода.\n"
+            "**Что сделать:**\n"
+            f"1. Уменьшите сумму кредита. Снижение с {loan_amount:,} ₸ до {free_balance * 0.4 * loan_term_months:,.0f} ₸ уложится в нагрузку.\n"
+            f"2. Увеличьте срок кредита до {int(loan_amount / (free_balance * 0.4)) + 1} месяцев, чтобы снизить платёж до {loan_amount / (int(loan_amount / (free_balance * 0.4)) + 1):.2f} ₸.\n"
+            "3. Увеличьте доход, предоставив справку о дополнительных доходах (например, от аренды).\n"
+            "**Совет:** Используйте калькулятор на сайте БЦК для подбора параметров.\n"
         )
-        recommendations.append(rec_text)
+        recommendations['financial'].append(rec_text)
+        quick_actions.append(("Подобрать кредит", "https://bcc.kz/loans/calculator"))
+
+    if age < 21 or age > 68:
+        rec_text = (
+            f"Ваш возраст ({age} лет) не соответствует требованиям БЦК (21–68 лет). "
+            "Возрастные ограничения связаны с оценкой платёжеспособности и рисков.\n"
+            "**Что сделать:**\n"
+            "1. Если вы младше 21 года, подождите достижения нужного возраста или найдите созаёмщика (например, родителя) с хорошей кредитной историей.\n"
+            "2. Если вы старше 68 лет, рассмотрите залоговый кредит, где возрастные ограничения менее строгие.\n"
+            "**Совет:** Обратитесь в отделение БЦК для консультации о программах для вашего возраста.\n"
+        )
+        recommendations['personal'].append(rec_text)
+        quick_actions.append(("Записаться на консультацию", "https://bcc.kz/contacts"))
+
+    if not has_credit_history:
+        rec_text = (
+            "У вас отсутствует кредитная история, что затрудняет оценку вашей платёжеспособности банком.\n"
+            "**Что сделать:**\n"
+            "1. Оформите небольшой кредит (например, на 100,000 ₸) или кредитную карту в БЦК и регулярно погашаете, чтобы создать положительную историю.\n"
+            "2. Используйте карту для мелких покупок и вовремя вносите платежи (3–6 месяцев достаточно).\n"
+            "3. Проверьте обновление истории на www.1cb.kz.\n"
+            "**Совет:** Начните с кредитной карты с лимитом 50,000 ₸, чтобы минимизировать риски.\n"
+        )
+        recommendations['financial'].append(rec_text)
+        quick_actions.append(("Оформить кредитную карту", "https://bcc.kz/cards"))
+
+    if not has_permanent_registration:
+        rec_text = (
+            "Отсутствие постоянной регистрации в зоне обслуживания банка является причиной отказа.\n"
+            "**Что сделать:**\n"
+            "1. Оформите постоянную регистрацию в ЦОНе по месту жительства.\n"
+            "2. Предоставьте документы, подтверждающие регистрацию, при подаче заявки.\n"
+            "3. Уточните зону обслуживания БЦК на сайте или в колл-центре.\n"
+            "**Совет:** Временная регистрация может не подойти, уточните требования в отделении.\n"
+        )
+        recommendations['legal'].append(rec_text)
+        quick_actions.append(("Обратиться в ЦОН", "https://egov.kz/services/10101"))
+
+    if not has_valid_documents:
+        rec_text = (
+            "Недействительные документы (например, просроченное удостоверение личности) являются причиной отказа.\n"
+            "**Что сделать:**\n"
+            "1. Проверьте срок действия удостоверения личности и других документов.\n"
+            "2. Обновите документы в ЦОНе, если они просрочены.\n"
+            "3. Убедитесь, что данные в анкете совпадают с документами (ФИО, ИИН).\n"
+            "**Совет:** Подготовьте полный пакет документов заранее, включая справку о доходах.\n"
+        )
+        recommendations['legal'].append(rec_text)
+        quick_actions.append(("Обновить документы", "https://egov.kz/services/10101"))
+
+    if has_criminal_record:
+        rec_text = (
+            "Наличие судимости (особенно по экономическим преступлениям) является причиной отказа.\n"
+            "**Что сделать:**\n"
+            "1. Уточните, можно ли снять судимость или получить справку о её погашении в суде.\n"
+            "2. Рассмотрите подачу заявки с созаёмщиком, у которого нет судимостей.\n"
+            "3. Обратитесь в БЦК для консультации о программах для вашей ситуации.\n"
+            "**Совет:** Залоговые кредиты могут быть доступны, так как риски для банка ниже.\n"
+        )
+        recommendations['personal'].append(rec_text)
+        quick_actions.append(("Записаться на консультацию", "https://bcc.kz/contacts"))
 
     approved, approval_reason, probability = approval_probability(
-        current_score, monthly_payment, client_data[0], client_data[5], loan_payments, client_data[1], fines, tax_debt, age, loan_amount, loan_term_months
+        current_score, monthly_payment, client_data[0], client_data[5], loan_payments, 
+        client_data[1], fines, tax_debt, age, loan_amount, loan_term_months, iin,
+        has_credit_history, has_permanent_registration, has_valid_documents, has_criminal_record
     )
 
     if not approved:
         new_term = int(loan_amount / (free_balance * 0.4)) + 1 if free_balance > 0 else loan_term_months
         new_payment = loan_amount / new_term
         loan_suggestions.append(
-            f"Попробуйте увеличить срок кредита до {new_term} месяцев — это снизит ежемесячный платёж до {new_payment:.2f} ₸, "
-            "что может повысить вероятность одобрения."
+            f"Увеличьте срок кредита до {new_term} месяцев, чтобы снизить платёж до {new_payment:.2f} ₸. "
+            "Это уменьшит долговую нагрузку и повысит вероятность одобрения."
         )
         new_amount = free_balance * 0.4 * loan_term_months
         loan_suggestions.append(
-            f"Или уменьшите сумму кредита до {new_amount:.2f} ₸ при текущем сроке ({loan_term_months} месяцев), "
-            "чтобы платёж стал более комфортным для вашего бюджета."
+            f"Уменьшите сумму кредита до {new_amount:.2f} ₸ при сроке {loan_term_months} месяцев, "
+            "чтобы уложиться в допустимую нагрузку (40% баланса)."
         )
         quick_actions.append(("Подобрать другой кредит", "https://bcc.kz/loans"))
 
-    if not recommendations:
-        recommendations.append(
-            "Уважаемый клиент, ваши финансовые показатели в отличном состоянии! "
-            "Продолжайте следить за своим рейтингом через приложение БЦК."
+    if not any(recommendations.values()):
+        rec_text = (
+            "Поздравляем! Ваши финансовые показатели в отличном состоянии: нет просрочек, штрафов, налоговых долгов, "
+            "а долговая нагрузка в норме. Вы — идеальный кандидат для кредита в БЦК.\n"
+            "**Что сделать:**\n"
+            "1. Подайте заявку через приложение БЦК для предварительного одобрения (5 минут).\n"
+            "2. Рассмотрите льготные программы, например, кредиты под 7% по госпрограммам.\n"
+            "3. Проверяйте кредитную историю на www.1cb.kz, чтобы поддерживать рейтинг.\n"
+            "**Совет:** Для крупных кредитов (ипотека) уточните требования к документам.\n"
         )
-
-    if probability >= 60:
-        quick_actions.append(("Оформить кредит онлайн", "https://cabinet.bcc.kz/loans/apply"))
+        recommendations['financial'].append(rec_text)
+        quick_actions.append(("Оформить кредит", "https://cabinet.bcc.kz/loans/apply"))
 
     return recommendations, loan_suggestions, current_score, approved, probability, quick_actions
-
-# Функция для анализа факторов клиента
-def analyze_client_factors(client_data, importance):
-    factors = ['Доходы', 'Просрочки', 'Штрафы', 'Налоги', 'Кредиты']
-    client_factors = []
-
-    if client_data[0] > 300000:
-        client_factors.append(f"Ваши доходы ({client_data[0]:.0f} ₸) выше среднего, это положительно влияет на рейтинг.")
-    else:
-        client_factors.append(f"Ваши доходы ({client_data[0]:.0f} ₸) ниже среднего, это может снижать рейтинг.")
-
-    if client_data[1] > 0:
-        client_factors.append(f"У вас есть {client_data[1]} просроченных платежей, это негативно влияет на рейтинг.")
-    else:
-        client_factors.append("У вас нет просрочек, это положительно влияет на рейтинг.")
-
-    if client_data[3] > 0:
-        client_factors.append(f"У вас есть {client_data[3]} неоплаченных штрафов, это снижает ваш рейтинг.")
-    else:
-        client_factors.append("У вас нет неоплаченных штрафов, это положительно влияет на рейтинг.")
-
-    if client_data[4] > 0:
-        client_factors.append(f"Налоговая задолженность ({client_data[4]:.2f} ₸) негативно влияет на ваш рейтинг.")
-    else:
-        client_factors.append("У вас нет налоговой задолженности, это положительно влияет на рейтинг.")
-
-    if client_data[5] > 2:
-        client_factors.append(f"У вас {client_data[5]} активных кредитов, высокая долговая нагрузка снижает рейтинг.")
-    else:
-        client_factors.append(f"У вас {client_data[5]} активных кредитов, это допустимая нагрузка для вашего рейтинга.")
-
-    return client_factors
 
 # Навигация
 st.sidebar.title("Навигация")
@@ -492,96 +543,80 @@ if page == "Беззалоговый кредит":
     """, unsafe_allow_html=True)
 
     with st.form("client_form"):
-        st.markdown("**Ваши данные**")
         iin = st.text_input("ИИН (12 цифр, обязательно)", max_chars=12)
-        if not iin or len(iin) != 12 or not iin.isdigit():
-            st.error("Пожалуйста, введите корректный ИИН (12 цифр).")
-
         cols = st.columns(2)
         with cols[0]:
-            income = st.number_input("Официальная заработная плата (₸)", min_value=0, value=st.session_state.client_data["income"], step=1000)
+            income = st.number_input("Зарплата (₸)", min_value=0, value=400000, step=1000)
             late_payments = st.selectbox("Просрочки", [0, 1, 2, 3, 4, 5])
-            age = st.number_input("Ваш возраст", min_value=18, value=30, step=1)
+            age = st.number_input("Возраст", min_value=18, value=30, step=1)
+            has_credit_history = st.checkbox("Есть кредитная история", value=True)
         with cols[1]:
-            loan_payments = st.number_input("Платежи по текущим кредитам (₸/месяц)", min_value=0, value=st.session_state.client_data["loan_payments"], step=1000)
+            loan_payments = st.number_input("Платежи по кредитам (₸/месяц)", min_value=0, value=20000, step=1000)
             active_loans = st.selectbox("Активные кредиты", [0, 1, 2, 3, 4, 5])
-
-        st.markdown("<div style='margin-top: 20px;'><b>Параметры желаемого кредита</b></div>", unsafe_allow_html=True)
+            has_permanent_registration = st.checkbox("Есть постоянная регистрация", value=True)
+            has_valid_documents = st.checkbox("Документы действительны", value=True)
+            has_criminal_record = st.checkbox("Есть судимость", value=False)
+        st.markdown("<div style='margin-top: 20px;'><b>Параметры кредита</b></div>", unsafe_allow_html=True)
         cols = st.columns(2)
         with cols[0]:
             loan_amount = st.number_input("Сумма кредита (₸)", min_value=60000, max_value=7000000, value=1000000, step=10000)
         with cols[1]:
             loan_term_months = st.slider("Срок кредита (месяцы)", 6, 60, 12)
-
         submitted = st.form_submit_button("Проверить")
-        if submitted and (not iin or len(iin) != 12 or not iin.isdigit()):
-            st.error("Пожалуйста, заполните поле ИИН корректно.")
-            submitted = False
 
     if submitted:
-        st.session_state.client_data["income"] = income
-        st.session_state.client_data["loan_payments"] = loan_payments
-
-        client_data = [income, late_payments, 50000, 0, 0, active_loans]
-        recommendations, loan_suggestions, current_score, approved, probability, quick_actions = generate_recommendations(
-            client_data, loan_amount, loan_term_months, iin, loan_payments, age
-        )
-
-        if approved:
-            st.markdown("**Кредит может быть одобрен ✅**", unsafe_allow_html=True)
+        if not iin or len(iin) != 12 or not iin.isdigit():
+            st.error("Пожалуйста, введите корректный ИИН (12 цифр).")
         else:
-            st.markdown("**Кредит не одобрен ❌**", unsafe_allow_html=True)
+            client_data = [income, late_payments, 50000, 0, 0, active_loans]
+            recommendations, loan_suggestions, current_score, approved, probability, quick_actions = generate_recommendations(
+                client_data, loan_amount, loan_term_months, iin, loan_payments, age,
+                has_credit_history, has_permanent_registration, has_valid_documents, has_criminal_record
+            )
 
-        st.header("Результаты")
-        color_class = "red" if probability < 60 else ""
-        st.markdown(f"""
-            <div class="approval-circle {color_class}">{probability:.0f}%</div>
-            <p class="approval-text {color_class}">Вероятность одобрения</p>
-        """, unsafe_allow_html=True)
-        st.markdown(f"""
-            <style>
-            .stMetric {{
-                border-color: {'#FF0000' if probability < 60 else '#00A859'} !important;
-                color: {'#FF0000' if probability < 60 else '#00A859'} !important;
-            }}
-            </style>
-        """, unsafe_allow_html=True)
-        st.metric("Кредитный рейтинг", f"{current_score:.0f}")
+            st.header("Вероятность одобрения вашей заявки")
+            st.markdown(f"<div class='approval-circle {'red' if probability < 70 else ''}'>{probability:.0f}%</div>", unsafe_allow_html=True)
 
-        button_color = "#FF0000" if probability < 60 else "#00A859"
-        st.markdown(f"""
-            <style>
-            .stButton>button {{
-                background-color: {button_color} !important;
-                transition: background-color 0.3s;
-            }}
-            </style>
-        """, unsafe_allow_html=True)
-        for action_text, url in quick_actions[-1:]:
-            st.link_button(action_text, url)
+            # Стилизация кредитного рейтинга
+            metric_class = "metric-container" if probability >= 60 else "metric-container-low"
+            st.markdown(
+                f"""
+                <div class="{metric_class}">
+                    <h3>Кредитный рейтинг</h3>
+                    <p style="font-size: 24px; font-weight: bold;">{current_score:.0f}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-        st.subheader("Персональные рекомендации")
-        for rec in recommendations:
-            st.write(f"- {rec}")
+            for category, recs in recommendations.items():
+                if recs:
+                    st.subheader("Персональные рекомендации для повышения кредитного рейтинга")
+                    for rec in recs:
+                        st.markdown(rec)
 
-        if loan_suggestions:
-            st.subheader("Оптимизация кредита")
-            for suggestion in loan_suggestions:
-                st.write(f"- {suggestion}")
+            if loan_suggestions:
+                st.subheader("Оптимизация кредита")
+                for suggestion in loan_suggestions:
+                    st.write(f"- {suggestion}")
 
-        st.subheader("Факторы влияния на ваш рейтинг")
-        client_factors = analyze_client_factors(client_data, model.feature_importances_)
-        for factor in client_factors:
-            st.write(f"- {factor}")
+            st.subheader("Быстрые действия")
+            for action_text, url in quick_actions:
+                st.link_button(action_text, url)
 
-        factors = ['Доходы', 'Просрочки', 'Штрафы', 'Налоги', 'Кредиты']
-        importance = model.feature_importances_[[0, 1, 3, 4, 5]]
-        fig, ax = plt.subplots(figsize=(10, 6))
-        sns.barplot(x=importance, y=factors, palette=['#00A859'] * len(factors))
-        ax.set_xlabel("Важность фактора", fontsize=12)
-        ax.grid(True, axis='x', linestyle='--', alpha=0.7)
-        plt.tight_layout()
-        st.pyplot(fig)
+            st.subheader("Факторы влияния на ваш рейтинг")
+            client_factors = analyze_client_factors(client_data, model.feature_importances_)
+            for factor in client_factors:
+                st.write(f"- {factor}")
+
+            factors = ['Доходы', 'Просрочки', 'Штрафы', 'Налоги', 'Кредиты']
+            importance = model.feature_importances_[[0, 1, 3, 4, 5]]
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sns.barplot(x=importance, y=factors, palette=['#00A859'] * len(factors))
+            ax.set_xlabel("Важность фактора", fontsize=12)
+            ax.grid(True, axis='x', linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            st.pyplot(fig)
 
 # Вторая страница: Залоговый кредит
 elif page == "Залоговый кредит":
@@ -621,19 +656,19 @@ elif page == "Залоговый кредит":
             collateral_value, loan_amount, loan_term_months, income, loan_payments, age, iin
         )
 
-        st.header("Результаты расчёта")
+        st.header("Вероятность одобрения вашей заявки")
         if error:
             st.error(error)
         else:
             if approved:
                 st.markdown("**Кредит может быть одобрен ✅**", unsafe_allow_html=True)
             else:
-                st.markdown("**Кредит не одобрен ❌**", unsafe_allow_html=True)
+                st.markdown("**Кредит может быть не одобрен ❌**", unsafe_allow_html=True)
 
             color_class = "red" if probability < 60 else ""
             st.markdown(f"""
                 <div class="approval-circle {color_class}">{probability:.0f}%</div>
-                <p class="approval-text {color_class}">Вероятность одобрения</p>
+                <p class="approval-text {color_class}">Вероятность одобрения кредита</p>
             """, unsafe_allow_html=True)
 
             st.metric("Максимальная сумма кредита (₸)", f"{max_loan_amount:.2f}")
@@ -698,14 +733,14 @@ elif page == "Кредиты для бизнеса":
             loan_amount, loan_term_months, income, loan_payments, business_type, purpose, iin
         )
 
-        st.header("Результаты расчёта")
+        st.header("Вероятность одобрения вашей заявки")
         if error:
             st.error(error)
         else:
             if approved:
                 st.markdown("**Кредит может быть одобрен ✅**", unsafe_allow_html=True)
             else:
-                st.markdown("**Кредит не одобрен ❌**", unsafe_allow_html=True)
+                st.markdown("**Кредит может быть не одобрен ❌**", unsafe_allow_html=True)
 
             color_class = "red" if probability < 60 else ""
             st.markdown(f"""
